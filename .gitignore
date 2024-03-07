@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 
 example_config.ini
+*.ini
