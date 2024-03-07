@@ -41,7 +41,7 @@ def get_ranking(centrality: typing.AnyStr):
         "eigenvector": library.get_ranking_eigenvector
     }
     for damping_factor in range(0,101):
-        lookup.update({f"pagerank-{damping_factor}": partial(library.get_ranking_pagerank, alpha="{:.2f}".format(damping_factor/100))})
+        lookup.update({f"pagerank-{damping_factor}": partial(library.get_ranking_pagerank, alpha=damping_factor/100)})
 
     return lookup[centrality]
 
