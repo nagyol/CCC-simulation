@@ -95,11 +95,12 @@ def generate_network(n, net_type, gamma=None):
     return graph
 
 
-def get_ranking_pagerank(graph: nx.Graph) -> typing.Dict:
+def get_ranking_pagerank(graph: nx.Graph, alpha: float = 0.85) -> typing.Dict:
+    # alpha = 0.85 was already the default value in networkX
     # pagerank_ranking = [i[0] for i in
     #                     sorted(nx.algorithms.pagerank(graph).items(), key=lambda x: x[1],
     #                            reverse=True)]
-    return nx.algorithms.pagerank(graph)
+    return nx.algorithms.pagerank(graph, alpha=alpha)
 
 
 def get_ranking_harmonic(graph: nx.Graph) -> typing.Dict:
