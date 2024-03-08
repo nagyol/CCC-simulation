@@ -25,7 +25,7 @@ def compare_centrality(baseline: typing.List, ranking_other: typing.List) -> typ
 def plot_overlap(results: typing.List, baseline: typing.AnyStr, centrality: typing.AnyStr, zoom: bool = True,
                  note: typing.AnyStr = None) -> None:
     library.plot_general(results, baseline=baseline, centrality=centrality, header="", zoom=zoom,
-                         parabola=True, note=note)
+                         parabola=True, rescale=True, note=note)
     return
 
 
