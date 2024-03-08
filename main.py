@@ -40,6 +40,9 @@ def get_ranking(centrality: typing.AnyStr):
         "katz": library.get_ranking_katz,
         "eigenvector": library.get_ranking_eigenvector
     }
+    for damping_factor in range(0,100):
+        lookup.update({f"pagerank-{damping_factor}": partial(library.get_ranking_pagerank, alpha=damping_factor/100)})
+
     return lookup[centrality]
 
 
@@ -62,7 +65,7 @@ def run_comparing_sim(runs: int, centrality1: typing.AnyStr, centrality2: typing
 
 def main():
 
-    all_conf_files = ['config2.ini']
+    all_conf_files = ['example_config.ini']
     for conf_file in all_conf_files:
         configuration = library.get_config_from_ini(conf_file)
         for centrality_pair in configuration.centralities:

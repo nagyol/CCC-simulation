@@ -35,8 +35,18 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
 
     # Get properties of simulation
     simulation = config_object["SIMULATION"]
-    centralities = [x.strip() for x in simulation["centralities"].split(',')]
-    all_scenarios = list(combinations_with_replacement(centralities, 2))
+    if simulation["centralities"] == "pagerankDF":
+        centralities = []
+        if "DFstep" in simulation.keys():
+            df_step = int(simulation["DFstep"])
+        else:
+            df_step = 10
+        for i in range (0, 100, df_step):
+            centralities.append(f"pagerank-{i}")
+            all_scenarios = list(combinations_with_replacement(centralities, 2))
+    else:
+        centralities = [x.strip() for x in simulation["centralities"].split(',')]
+        all_scenarios = list(combinations_with_replacement(centralities, 2))
     runs = int(simulation["runs"])
     try:
         suffix = simulation["suffix"]
@@ -95,11 +105,12 @@ def generate_network(n, net_type, gamma=None):
     return graph
 
 
-def get_ranking_pagerank(graph: nx.Graph) -> typing.Dict:
+def get_ranking_pagerank(graph: nx.Graph, alpha: float = 0.85) -> typing.Dict:
+    # alpha = 0.85 was already the default value in networkX
     # pagerank_ranking = [i[0] for i in
     #                     sorted(nx.algorithms.pagerank(graph).items(), key=lambda x: x[1],
     #                            reverse=True)]
-    return nx.algorithms.pagerank(graph)
+    return nx.algorithms.pagerank(graph, alpha=alpha)
 
 
 def get_ranking_harmonic(graph: nx.Graph) -> typing.Dict:
