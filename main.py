@@ -46,11 +46,13 @@ def get_ranking(centrality: typing.AnyStr):
     return lookup[centrality]
 
 
+def simulate_one_scenario(in_centrality1: typing.AnyStr, in_centrality2: typing.AnyStr, in_configuration: typing.NamedTuple):
+    graph = in_configuration.generator()
+    return compare_centrality(get_ranking(in_centrality1)(graph), get_ranking(in_centrality2)(graph))
+
+
 def run_comparing_sim(runs: int, centrality1: typing.AnyStr, centrality2: typing.AnyStr, configuration: typing.NamedTuple,
                       note: typing.AnyStr = None, parallel: bool = True) -> None:
-    def simulate_one_scenario(in_centrality1: typing.AnyStr, in_centrality2: typing.AnyStr, in_configuration: typing.NamedTuple):
-        graph = in_configuration.generator()
-        return compare_centrality(get_ranking(in_centrality1)(graph), get_ranking(in_centrality2)(graph))
 
     print(f'Running: {centrality1} vs. {centrality2}, conffile: {configuration.name}')
     if not parallel:
@@ -69,7 +71,7 @@ def main():
     for conf_file in all_conf_files:
         configuration = library.get_config_from_ini(conf_file)
         for centrality_pair in configuration.centralities:
-            run_comparing_sim(configuration.runs, centrality_pair[0], centrality_pair[1], configuration, note=configuration.note, parallel=False)
+            run_comparing_sim(configuration.runs, centrality_pair[0], centrality_pair[1], configuration, note=configuration.note, parallel=True)
             print(f"Completed simulation for {centrality_pair[0]} vs. {centrality_pair[1]}, configuration: {conf_file}")
 
 

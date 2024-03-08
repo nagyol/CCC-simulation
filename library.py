@@ -15,10 +15,11 @@ import numpy as np
 
 matplotlib.use("TkAgg")
 
+Conf = namedtuple('Conf', 'generator note name centralities suffix runs')
 
 def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
     # returns a namedtuple defined below
-    Conf = namedtuple('Conf', 'generator note name centralities suffix runs')
+
 
     # Get the configparser object
     config_object = ConfigParser(interpolation=ExtendedInterpolation())
