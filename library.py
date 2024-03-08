@@ -9,6 +9,7 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import networkx as nx
 import numpy as np
 
@@ -41,7 +42,7 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
             df_step = int(simulation["DFstep"])
         else:
             df_step = 10
-        for i in range (0, 100, df_step):
+        for i in range(0, 100, df_step):
             centralities.append(f"pagerank-{i}")
             all_scenarios = list(combinations_with_replacement(centralities, 2))
     else:
@@ -155,7 +156,7 @@ def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
 
 
 def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typing.AnyStr, header: typing.AnyStr = None,
-                 parabola: bool = False, zoom: bool = True, note: typing.AnyStr = None) -> None:
+                 parabola: bool = False, zoom: bool = True, rescale: bool = False, note: typing.AnyStr = None) -> None:
     if isinstance(results[0], list):
         mean = np.mean(np.array(results), axis=0)
         error = np.std(np.array(results), axis=0)
@@ -183,6 +184,11 @@ def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typi
         points = np.linspace(0, len(mean), 100000)
         y_points = (points ** 2) / len(mean)
         ax.plot(points, y_points)
+
+    if rescale:
+        ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x / len(mean)))
+        ax.xaxis.set_major_formatter(ticks)
+        ax.yaxis.set_major_formatter(ticks)
 
     Path("./results").mkdir(parents=True, exist_ok=True)
     plt.savefig(f"./results/{baseline}-{centrality}-{datetime.datetime.now():%Y-%m-%d-%X}.pdf")
