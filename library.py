@@ -6,6 +6,7 @@ from configparser import ConfigParser, ExtendedInterpolation
 from functools import partial
 from itertools import combinations_with_replacement
 from pathlib import Path
+from os import path
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -192,6 +193,8 @@ def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typi
         ax.yaxis.set_major_formatter(ticks)
 
     Path("./results").mkdir(parents=True, exist_ok=True)
-    plt.savefig(f"./results/{baseline}-{centrality}-{datetime.datetime.now():%Y-%m-%d-%X}.pdf")
+    filename = fr"{baseline}-{centrality}-{datetime.datetime.now():%Y-%m-%d-%H%M%S}.pdf"
+    destination = path.join(path.abspath("results"), filename)
+    plt.savefig(destination)
 
     plt.clf()
