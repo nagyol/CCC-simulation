@@ -4,7 +4,7 @@ import typing
 from collections import namedtuple
 from configparser import ConfigParser, ExtendedInterpolation
 from functools import partial
-from itertools import combinations_with_replacement
+from itertools import combinations
 from pathlib import Path
 from os import path
 
@@ -51,10 +51,10 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
             df_step = 10
         for i in range(0, 100, df_step):
             centralities.append(f"pagerank-{i}")
-            all_scenarios = list(combinations_with_replacement(centralities, 2))
+            all_scenarios = list(combinations(centralities, 2))
     else:
         centralities = [x.strip() for x in simulation["centralities"].split(',')]
-        all_scenarios = list(combinations_with_replacement(centralities, 2))
+        all_scenarios = list(combinations(centralities, 2))
     runs = int(simulation["runs"])
     try:
         suffix = simulation["suffix"]
@@ -161,7 +161,9 @@ def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
 
 
 def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
-    return nx.algorithms.katz_centrality_numpy(graph, alpha=1./(2*max(nx.adjacency_spectrum(G))))
+    if graph.is_multigraph():
+        graph = nx.DiGraph(graph)
+    return nx.algorithms.katz_centrality_numpy(graph, alpha=1./(2*max(nx.adjacency_spectrum(graph))))
 
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
