@@ -99,6 +99,9 @@ def generate_network(n, net_type, gamma=None, out_gamma=None):
         case "coll-grqc":
             tmp_graph = nx.read_edgelist('CA-GrQc.txt')
             graph = nx.convert_node_labels_to_integers(tmp_graph)
+        case "cit-hepph":
+            tmp_graph = nx.read_edgelist('Cit-HepPh.txt')
+            graph = nx.convert_node_labels_to_integers(tmp_graph)
         case "configuration-model":
             while True:
                 degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not gamma else gamma)]
