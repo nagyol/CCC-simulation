@@ -135,7 +135,7 @@ def get_ranking_harmonic(graph: nx.Graph) -> typing.Dict:
 
 
 def get_ranking_eigenvector(graph: nx.Graph) -> typing.Dict:
-    return nx.algorithms.eigenvector_centrality(graph)
+    return nx.algorithms.eigenvector_centrality_numpy(graph)
 
 
 def get_ranking_betweenness(graph: nx.Graph) -> typing.Dict:
@@ -161,7 +161,7 @@ def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
 
 
 def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
-    return nx.algorithms.katz_centrality_numpy(graph)
+    return nx.algorithms.katz_centrality_numpy(graph, alpha=1./(2*max(nx.adjacency_spectrum(G))))
 
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
