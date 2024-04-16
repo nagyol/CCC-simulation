@@ -100,7 +100,7 @@ def generate_network(n, net_type, gamma=None, out_gamma=None):
             tmp_graph = nx.read_edgelist('CA-GrQc.txt')
             graph = nx.convert_node_labels_to_integers(tmp_graph)
         case "cit-hepph":
-            tmp_graph = nx.read_edgelist('Cit-HepPh.txt')
+            tmp_graph = nx.read_edgelist('Cit-HepPh.txt', create_using=nx.DiGraph)
             graph = nx.convert_node_labels_to_integers(tmp_graph)
         case "configuration-model":
             while True:
