@@ -31,10 +31,15 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
     vertex_count = int(topology["N"])
     graph_model = topology["M"]
     gamma = None
+    out_gamma = None
     note = graph_model
     if graph_model == "configuration-model":
         gamma = float(config_object["CONFIGURATIONMODEL"]["gamma"])
         note = f'{graph_model}-"power_law_exp":{gamma}'
+    if graph_model == "directed-CM":
+        gamma = float(config_object["CONFIGURATIONMODEL"]["gamma"])
+        out_gamma = float(config_object["CONFIGURATIONMODEL"]["out_gamma"])
+        note = f'{graph_model}-"in_PL_exp":{gamma}-"in_PL_exp":{out_gamma}'
 
     # Get properties of simulation
     simulation = config_object["SIMULATION"]
@@ -57,13 +62,13 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
         suffix = ""
 
     # Finalize objects
-    graph_generator = partial(generate_network, vertex_count, graph_model, gamma)
+    graph_generator = partial(generate_network, vertex_count, graph_model, gamma, out_gamma)
     full_note = f'{note}{("" if suffix == "" else "-")}{suffix}'
 
     return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs)
 
 
-def generate_network(n, net_type, gamma=None):
+def generate_network(n, net_type, gamma=None, out_gamma=None):
     # Input:
     #   N - number of nodes
     #   cnType  - network type (i.e. scale-free, small-world, Erdos-Renyi random graph)
@@ -102,6 +107,15 @@ def generate_network(n, net_type, gamma=None):
             graph = nx.configuration_model(degree_sequence)
             graph = nx.Graph(graph)  # remove parallel edges
             graph.remove_edges_from(nx.selfloop_edges(graph))  # remove self-loops
+        case "directed-CM":
+            in_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not gamma else gamma)]
+            while True:
+                out_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not out_gamma else out_gamma)]
+                if sum(in_degree_sequence) == sum(out_degree_sequence):
+                    break
+            graph = nx.directed_configuration_model(in_degree_sequence, out_degree_sequence)
+            graph = nx.DiGraph(graph)
+            graph.remove_edges_from(nx.selfloop_edges(graph))
         case _:
             raise Exception("Missing network type")
 
