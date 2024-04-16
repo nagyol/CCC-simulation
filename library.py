@@ -4,7 +4,7 @@ import typing
 from collections import namedtuple
 from configparser import ConfigParser, ExtendedInterpolation
 from functools import partial
-from itertools import combinations_with_replacement
+from itertools import combinations
 from pathlib import Path
 from os import path
 
@@ -31,10 +31,15 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
     vertex_count = int(topology["N"])
     graph_model = topology["M"]
     gamma = None
+    out_gamma = None
     note = graph_model
     if graph_model == "configuration-model":
         gamma = float(config_object["CONFIGURATIONMODEL"]["gamma"])
-        note = f'{graph_model}-"power_law_exp":{gamma}'
+        note = f'{graph_model}-"PL_exp":{gamma}'
+    if graph_model == "directed-CM":
+        gamma = float(config_object["CONFIGURATIONMODEL"]["gamma"])
+        out_gamma = float(config_object["CONFIGURATIONMODEL"]["out_gamma"])
+        note = f'{graph_model}-"inPL_exp":{gamma}-"outPL_exp":{out_gamma}'
 
     # Get properties of simulation
     simulation = config_object["SIMULATION"]
@@ -46,10 +51,10 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
             df_step = 10
         for i in range(0, 100, df_step):
             centralities.append(f"pagerank-{i}")
-            all_scenarios = list(combinations_with_replacement(centralities, 2))
+            all_scenarios = list(combinations(centralities, 2))
     else:
         centralities = [x.strip() for x in simulation["centralities"].split(',')]
-        all_scenarios = list(combinations_with_replacement(centralities, 2))
+        all_scenarios = list(combinations(centralities, 2))
     runs = int(simulation["runs"])
     try:
         suffix = simulation["suffix"]
@@ -57,13 +62,13 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
         suffix = ""
 
     # Finalize objects
-    graph_generator = partial(generate_network, vertex_count, graph_model, gamma)
+    graph_generator = partial(generate_network, vertex_count, graph_model, gamma, out_gamma)
     full_note = f'{note}{("" if suffix == "" else "-")}{suffix}'
 
     return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs)
 
 
-def generate_network(n, net_type, gamma=None):
+def generate_network(n, net_type, gamma=None, out_gamma=None):
     # Input:
     #   N - number of nodes
     #   cnType  - network type (i.e. scale-free, small-world, Erdos-Renyi random graph)
@@ -102,6 +107,15 @@ def generate_network(n, net_type, gamma=None):
             graph = nx.configuration_model(degree_sequence)
             graph = nx.Graph(graph)  # remove parallel edges
             graph.remove_edges_from(nx.selfloop_edges(graph))  # remove self-loops
+        case "directed-CM":
+            in_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not gamma else gamma)]
+            while True:
+                out_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not out_gamma else out_gamma)]
+                if sum(in_degree_sequence) == sum(out_degree_sequence):
+                    break
+            graph = nx.directed_configuration_model(in_degree_sequence, out_degree_sequence)
+            graph = nx.DiGraph(graph)
+            graph.remove_edges_from(nx.selfloop_edges(graph))
         case _:
             raise Exception("Missing network type")
 
@@ -121,7 +135,7 @@ def get_ranking_harmonic(graph: nx.Graph) -> typing.Dict:
 
 
 def get_ranking_eigenvector(graph: nx.Graph) -> typing.Dict:
-    return nx.algorithms.eigenvector_centrality(graph)
+    return nx.algorithms.eigenvector_centrality_numpy(graph)
 
 
 def get_ranking_betweenness(graph: nx.Graph) -> typing.Dict:
@@ -135,13 +149,21 @@ def get_ranking_load(graph: nx.Graph) -> typing.Dict:
 def get_ranking_degree(graph: nx.Graph) -> typing.Dict:
     return nx.algorithms.degree_centrality(graph)
 
+def get_ranking_indegree(graph: nx.DiGraph) -> typing.Dict:
+    return nx.algorithms.in_degree_centrality(graph)
+
+def get_ranking_outdegree(graph: nx.DiGraph) -> typing.Dict:
+    return nx.algorithms.out_degree_centrality(graph)
+
 
 def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
     return nx.algorithms.closeness_centrality(graph)
 
 
 def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
-    return nx.algorithms.katz_centrality_numpy(graph)
+    if graph.is_multigraph():
+        graph = nx.DiGraph(graph)
+    return nx.algorithms.katz_centrality_numpy(graph, alpha=1./(2*max(nx.adjacency_spectrum(graph))))
 
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
