@@ -38,7 +38,9 @@ def get_ranking(centrality: typing.AnyStr):
         "degree": library.get_ranking_degree,
         "load": library.get_ranking_load,
         "katz": library.get_ranking_katz,
-        "eigenvector": library.get_ranking_eigenvector
+        "eigenvector": library.get_ranking_eigenvector,
+        "indegree": library.get_ranking_indegree,
+        "outdegree": library.get_ranking_outdegree
     }
     for damping_factor in range(0,100):
         lookup.update({f"pagerank-{damping_factor}": partial(library.get_ranking_pagerank, alpha=damping_factor/100)})

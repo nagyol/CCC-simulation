@@ -35,11 +35,11 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
     note = graph_model
     if graph_model == "configuration-model":
         gamma = float(config_object["CONFIGURATIONMODEL"]["gamma"])
-        note = f'{graph_model}-"power_law_exp":{gamma}'
+        note = f'{graph_model}-"PL_exp":{gamma}'
     if graph_model == "directed-CM":
         gamma = float(config_object["CONFIGURATIONMODEL"]["gamma"])
         out_gamma = float(config_object["CONFIGURATIONMODEL"]["out_gamma"])
-        note = f'{graph_model}-"in_PL_exp":{gamma}-"in_PL_exp":{out_gamma}'
+        note = f'{graph_model}-"inPL_exp":{gamma}-"outPL_exp":{out_gamma}'
 
     # Get properties of simulation
     simulation = config_object["SIMULATION"]
@@ -148,6 +148,12 @@ def get_ranking_load(graph: nx.Graph) -> typing.Dict:
 
 def get_ranking_degree(graph: nx.Graph) -> typing.Dict:
     return nx.algorithms.degree_centrality(graph)
+
+def get_ranking_indegree(graph: nx.DiGraph) -> typing.Dict:
+    return nx.algorithms.in_degree_centrality(graph)
+
+def get_ranking_outdegree(graph: nx.DiGraph) -> typing.Dict:
+    return nx.algorithms.out_degree_centrality(graph)
 
 
 def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
