@@ -105,9 +105,22 @@ def generate_network(n, net_type, gamma=None, out_gamma=None):
                 if nx.is_graphical(degree_sequence):
                     break
             graph = nx.configuration_model(degree_sequence)
+        case "configuration-model-simple":
+            while True:
+                degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not gamma else gamma)]
+                if nx.is_graphical(degree_sequence):
+                    break
+            graph = nx.configuration_model(degree_sequence)
             graph = nx.Graph(graph)  # remove parallel edges
             graph.remove_edges_from(nx.selfloop_edges(graph))  # remove self-loops
         case "directed-CM":
+            in_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not gamma else gamma)]
+            while True:
+                out_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not out_gamma else out_gamma)]
+                if sum(in_degree_sequence) == sum(out_degree_sequence):
+                    break
+            graph = nx.directed_configuration_model(in_degree_sequence, out_degree_sequence)
+        case "directed-CM-simple":
             in_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not gamma else gamma)]
             while True:
                 out_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not out_gamma else out_gamma)]
