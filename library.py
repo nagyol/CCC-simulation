@@ -179,7 +179,8 @@ def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
 def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
     if graph.is_multigraph():
         graph = nx.DiGraph(graph)
-    return nx.algorithms.katz_centrality_numpy(graph, alpha=1./(2*max(nx.adjacency_spectrum(graph))))
+    alpha = 1./(2*max(graph.degree())[0])
+    return nx.algorithms.katz_centrality_numpy(graph, alpha=alpha)
 
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
