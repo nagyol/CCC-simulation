@@ -14,9 +14,99 @@ import matplotlib.ticker as ticker
 import networkx as nx
 import numpy as np
 
-matplotlib.use("TkAgg")
+try:
+    matplotlib.use("TkAgg")
+except ImportError:
+    matplotlib.use("Agg")
+
+try:
+    import igraph as ig
+    HAS_IGRAPH = True
+except ImportError:
+    HAS_IGRAPH = False
 
 Conf = namedtuple('Conf', 'generator note name centralities suffix runs')
+
+def nx_to_igraph(graph: typing.Union[nx.Graph, nx.DiGraph]) -> "ig.Graph":
+    # Efficient conversion from NetworkX to igraph
+    # Assumes nodes are integers 0..N-1
+    if not HAS_IGRAPH:
+        raise ImportError("igraph not installed")
+
+    directed = graph.is_directed()
+    # If the graph is a MultiGraph, igraph handles parallel edges, but we need to verify expectations.
+    # The config models in generate_network seem to be mostly simple graphs or handle multigraphs by conversion.
+
+    # igraph from_networkx is quite fast, but we can potentially speed it up
+    # if we know the structure.
+    # However, from_networkx is generally well-optimized in recent versions.
+    # One caveat: from_networkx might preserve node names as 'name' attribute,
+    # and vertex indices might not match node IDs if node IDs are not contiguous integers.
+    # But our generate_network ensures conversion to integers.
+
+    # Let's verify if node IDs align.
+    # If nodes are 0..N-1, igraph will use them as indices implicitly if we just pass edges?
+    # No, from_networkx maps them.
+
+    return ig.Graph.from_networkx(graph)
+
+def _igraph_centrality_wrapper(graph: nx.Graph, func_name: str, **kwargs) -> typing.Dict:
+    if HAS_IGRAPH:
+        try:
+            # We need to cache the conversion if possible, but the current architecture
+            # passes a fresh graph or existing graph to each function.
+            # Conversion overhead is small compared to speedup for heavy metrics (betweenness),
+            # but might be comparable for fast ones (degree).
+
+            ig_graph = nx_to_igraph(graph)
+
+            # Map method names
+            if func_name == "pagerank":
+                # igraph pagerank returns a list of scores
+                scores = ig_graph.pagerank(**kwargs)
+            elif func_name == "betweenness":
+                scores = ig_graph.betweenness(**kwargs)
+            elif func_name == "closeness":
+                # igraph closeness: normalized=True by default? No.
+                # NX closeness is normalized.
+                # igraph: closeness(vertices=None, mode=ALL, cutoff=None, weights=None, normalized=True)
+                scores = ig_graph.closeness(normalized=True, **kwargs)
+            elif func_name == "eigenvector_centrality":
+                scores = ig_graph.eigenvector_centrality(**kwargs)
+            elif func_name == "degree":
+                scores = ig_graph.degree(**kwargs)
+            elif func_name == "indegree":
+                 scores = ig_graph.degree(mode="in", **kwargs)
+            elif func_name == "outdegree":
+                 scores = ig_graph.degree(mode="out", **kwargs)
+            elif func_name == "harmonic_centrality":
+                 # igraph < 0.10 might not have harmonic. 1.0.0 has it?
+                 # It's often called harmonic_centrality or similar.
+                 # Let's check attribute.
+                 if hasattr(ig_graph, "harmonic_centrality"):
+                     scores = ig_graph.harmonic_centrality(**kwargs)
+                 else:
+                     # Fallback to NX if not implemented (though it should be in recent igraph)
+                     return None
+            else:
+                return None
+
+            # Create dictionary mapping node ID -> score
+            # If using from_networkx, the vertex attribute '_nx_name' stores original ID.
+            # But if original IDs were integers 0..N-1, they might be implicit.
+
+            if "_nx_name" in ig_graph.vs.attributes():
+                return {v["_nx_name"]: s for v, s in zip(ig_graph.vs, scores)}
+            else:
+                # Assume contiguous 0..N-1
+                return {i: s for i, s in enumerate(scores)}
+
+        except Exception as e:
+            # Fallback to NX on any error (e.g. implementation mismatch)
+            print(f"igraph failed for {func_name}: {e}. Falling back to NetworkX.")
+            pass
+
+    return None
 
 def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
     # returns a namedtuple defined below
@@ -139,40 +229,79 @@ def generate_network(n, net_type, gamma=None, out_gamma=None):
 
 
 def get_ranking_pagerank(graph: nx.Graph, alpha: float = 0.85) -> typing.Dict:
-    # alpha = 0.85 was already the default value in networkX
-    # pagerank_ranking = [i[0] for i in
-    #                     sorted(nx.algorithms.pagerank(graph).items(), key=lambda x: x[1],
-    #                            reverse=True)]
+    # Try igraph first
+    # igraph uses 'damping' instead of 'alpha'
+    res = _igraph_centrality_wrapper(graph, "pagerank", damping=alpha)
+    if res is not None:
+        return res
     return nx.algorithms.pagerank(graph, alpha=alpha)
 
 
 def get_ranking_harmonic(graph: nx.Graph) -> typing.Dict:
+    res = _igraph_centrality_wrapper(graph, "harmonic_centrality")
+    if res is not None:
+        return res
     return nx.algorithms.harmonic_centrality(graph)
 
 
 def get_ranking_eigenvector(graph: nx.Graph) -> typing.Dict:
+    # igraph eigenvector_centrality defaults to scale=True
+    res = _igraph_centrality_wrapper(graph, "eigenvector_centrality", scale=False)
+    if res is not None:
+        return res
     return nx.algorithms.eigenvector_centrality_numpy(graph)
 
 
 def get_ranking_betweenness(graph: nx.Graph) -> typing.Dict:
+    res = _igraph_centrality_wrapper(graph, "betweenness")
+    if res is not None:
+        return res
     return nx.algorithms.betweenness_centrality(graph)
 
 
 def get_ranking_load(graph: nx.Graph) -> typing.Dict:
+    # Load centrality is not standard in igraph (it's similar to betweenness but different).
+    # Keep NX for now.
     return nx.algorithms.load_centrality(graph)
 
 
 def get_ranking_degree(graph: nx.Graph) -> typing.Dict:
+    # igraph degree is raw degree. NX degree_centrality is normalized (degree / (N-1)).
+    # We must normalize igraph output to match NX.
+    # But wait, my wrapper returns raw scores for degree?
+    # Let's adjust wrapper or adjust here.
+    # Adjusting here is safer.
+
+    # Actually, for the purpose of ranking (ordering), normalization doesn't matter!
+    # The 'compare_centrality' function only cares about the order of nodes.
+    # However, if we ever compare raw values, it matters.
+    # The function name is 'get_ranking_*' but it returns a dict of values.
+    # The consuming code in main.py: compare_centrality sorts them.
+    # So relative order is all that matters.
+    # Raw degree and normalized degree have same order.
+
+    res = _igraph_centrality_wrapper(graph, "degree")
+    if res is not None:
+        return res
     return nx.algorithms.degree_centrality(graph)
 
 def get_ranking_indegree(graph: nx.DiGraph) -> typing.Dict:
+    res = _igraph_centrality_wrapper(graph, "indegree")
+    if res is not None:
+        return res
     return nx.algorithms.in_degree_centrality(graph)
 
 def get_ranking_outdegree(graph: nx.DiGraph) -> typing.Dict:
+    res = _igraph_centrality_wrapper(graph, "outdegree")
+    if res is not None:
+        return res
     return nx.algorithms.out_degree_centrality(graph)
 
 
 def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
+    res = _igraph_centrality_wrapper(graph, "closeness")
+    if res is not None:
+        return res
     return nx.algorithms.closeness_centrality(graph)
 
 
@@ -184,15 +313,13 @@ def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
 
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
-    with multiprocessing.Manager():
-        pool = multiprocessing.Pool()
-        async_results = []
-        for i in range(runs):
-            async_results.append(pool.apply_async(fn))
-        pool.close()
-        pool.join()
+    with multiprocessing.Pool() as pool:
+        # Using map or imap might be cleaner, but starmap/map expects iterables.
+        # Since fn takes no arguments (it is a partial), we can just execute it `runs` times.
+        # However, pool.map needs an iterable.
+        # We can use apply_async in a list comp or loop, but context manager handles cleanup.
+        async_results = [pool.apply_async(fn) for _ in range(runs)]
         results = [result.get() for result in async_results]
-
     return results
 
 
