@@ -14,7 +14,10 @@ import matplotlib.ticker as ticker
 import networkx as nx
 import numpy as np
 
-matplotlib.use("TkAgg")
+try:
+    matplotlib.use("TkAgg")
+except ImportError:
+    matplotlib.use("Agg")
 
 Conf = namedtuple('Conf', 'generator note name centralities suffix runs')
 
@@ -184,15 +187,13 @@ def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
 
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
-    with multiprocessing.Manager():
-        pool = multiprocessing.Pool()
-        async_results = []
-        for i in range(runs):
-            async_results.append(pool.apply_async(fn))
-        pool.close()
-        pool.join()
+    with multiprocessing.Pool() as pool:
+        # Using map or imap might be cleaner, but starmap/map expects iterables.
+        # Since fn takes no arguments (it is a partial), we can just execute it `runs` times.
+        # However, pool.map needs an iterable.
+        # We can use apply_async in a list comp or loop, but context manager handles cleanup.
+        async_results = [pool.apply_async(fn) for _ in range(runs)]
         results = [result.get() for result in async_results]
-
     return results
 
 
