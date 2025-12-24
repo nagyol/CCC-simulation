@@ -1,5 +1,9 @@
 import datetime
+import glob
 import multiprocessing
+import os
+import pickle
+import uuid
 import typing
 from collections import namedtuple
 from configparser import ConfigParser, ExtendedInterpolation
@@ -25,51 +29,22 @@ try:
 except ImportError:
     HAS_IGRAPH = False
 
-Conf = namedtuple('Conf', 'generator note name centralities suffix runs')
+Conf = namedtuple('Conf', 'generator note name centralities suffix runs cache save load cache_dir N M')
 
 def nx_to_igraph(graph: typing.Union[nx.Graph, nx.DiGraph]) -> "ig.Graph":
-    # Efficient conversion from NetworkX to igraph
-    # Assumes nodes are integers 0..N-1
     if not HAS_IGRAPH:
         raise ImportError("igraph not installed")
-
-    directed = graph.is_directed()
-    # If the graph is a MultiGraph, igraph handles parallel edges, but we need to verify expectations.
-    # The config models in generate_network seem to be mostly simple graphs or handle multigraphs by conversion.
-
-    # igraph from_networkx is quite fast, but we can potentially speed it up
-    # if we know the structure.
-    # However, from_networkx is generally well-optimized in recent versions.
-    # One caveat: from_networkx might preserve node names as 'name' attribute,
-    # and vertex indices might not match node IDs if node IDs are not contiguous integers.
-    # But our generate_network ensures conversion to integers.
-
-    # Let's verify if node IDs align.
-    # If nodes are 0..N-1, igraph will use them as indices implicitly if we just pass edges?
-    # No, from_networkx maps them.
-
     return ig.Graph.from_networkx(graph)
 
 def _igraph_centrality_wrapper(graph: nx.Graph, func_name: str, **kwargs) -> typing.Dict:
     if HAS_IGRAPH:
         try:
-            # We need to cache the conversion if possible, but the current architecture
-            # passes a fresh graph or existing graph to each function.
-            # Conversion overhead is small compared to speedup for heavy metrics (betweenness),
-            # but might be comparable for fast ones (degree).
-
             ig_graph = nx_to_igraph(graph)
-
-            # Map method names
             if func_name == "pagerank":
-                # igraph pagerank returns a list of scores
                 scores = ig_graph.pagerank(**kwargs)
             elif func_name == "betweenness":
                 scores = ig_graph.betweenness(**kwargs)
             elif func_name == "closeness":
-                # igraph closeness: normalized=True by default? No.
-                # NX closeness is normalized.
-                # igraph: closeness(vertices=None, mode=ALL, cutoff=None, weights=None, normalized=True)
                 scores = ig_graph.closeness(normalized=True, **kwargs)
             elif func_name == "eigenvector_centrality":
                 scores = ig_graph.eigenvector_centrality(**kwargs)
@@ -80,43 +55,26 @@ def _igraph_centrality_wrapper(graph: nx.Graph, func_name: str, **kwargs) -> typ
             elif func_name == "outdegree":
                  scores = ig_graph.degree(mode="out", **kwargs)
             elif func_name == "harmonic_centrality":
-                 # igraph < 0.10 might not have harmonic. 1.0.0 has it?
-                 # It's often called harmonic_centrality or similar.
-                 # Let's check attribute.
                  if hasattr(ig_graph, "harmonic_centrality"):
                      scores = ig_graph.harmonic_centrality(**kwargs)
                  else:
-                     # Fallback to NX if not implemented (though it should be in recent igraph)
                      return None
             else:
                 return None
 
-            # Create dictionary mapping node ID -> score
-            # If using from_networkx, the vertex attribute '_nx_name' stores original ID.
-            # But if original IDs were integers 0..N-1, they might be implicit.
-
             if "_nx_name" in ig_graph.vs.attributes():
                 return {v["_nx_name"]: s for v, s in zip(ig_graph.vs, scores)}
             else:
-                # Assume contiguous 0..N-1
                 return {i: s for i, s in enumerate(scores)}
-
         except Exception as e:
-            # Fallback to NX on any error (e.g. implementation mismatch)
             print(f"igraph failed for {func_name}: {e}. Falling back to NetworkX.")
             pass
-
     return None
 
 def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
-    # returns a namedtuple defined below
-
-
-    # Get the configparser object
     config_object = ConfigParser(interpolation=ExtendedInterpolation())
     config_object.read(path_to_ini)
 
-    # Get graph properties
     topology = config_object["TOPOLOGY"]
     vertex_count = int(topology["N"])
     graph_model = topology["M"]
@@ -131,7 +89,6 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
         out_gamma = float(config_object["CONFIGURATIONMODEL"]["out_gamma"])
         note = f'{graph_model}-"inPL_exp":{gamma}-"outPL_exp":{out_gamma}'
 
-    # Get properties of simulation
     simulation = config_object["SIMULATION"]
     if simulation["centralities"] == "pagerankDF":
         centralities = []
@@ -146,25 +103,19 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
         centralities = [x.strip() for x in simulation["centralities"].split(',')]
         all_scenarios = list(combinations(centralities, 2))
     runs = int(simulation["runs"])
-    try:
-        suffix = simulation["suffix"]
-    except KeyError:
-        suffix = ""
 
-    # Finalize objects
+    suffix = simulation.get("suffix", "")
+    cache = simulation.getboolean("cache", fallback=False)
+    save = simulation.getboolean("save", fallback=False)
+    load = simulation.getboolean("load", fallback=False)
+    cache_dir = simulation.get("cache_dir", "cache")
+
     graph_generator = partial(generate_network, vertex_count, graph_model, gamma, out_gamma)
     full_note = f'{note}{("" if suffix == "" else "-")}{suffix}'
 
-    return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs)
-
+    return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs, cache, save, load, cache_dir, vertex_count, graph_model)
 
 def generate_network(n, net_type, gamma=None, out_gamma=None):
-    # Input:
-    #   N - number of nodes
-    #   cnType  - network type (i.e. scale-free, small-world, Erdos-Renyi random graph)
-    # Output:
-    #   graph - a network with random generated topology according to the input parameters
-
     match net_type:
         case "scale-free":
             graph = nx.powerlaw_cluster_graph(n, 5, 0.3)
@@ -204,8 +155,8 @@ def generate_network(n, net_type, gamma=None, out_gamma=None):
                 if nx.is_graphical(degree_sequence):
                     break
             graph = nx.configuration_model(degree_sequence)
-            graph = nx.Graph(graph)  # remove parallel edges
-            graph.remove_edges_from(nx.selfloop_edges(graph))  # remove self-loops
+            graph = nx.Graph(graph)
+            graph.remove_edges_from(nx.selfloop_edges(graph))
         case "directed-CM":
             in_degree_sequence = [int(d) + 1 for d in nx.utils.powerlaw_sequence(n, 3 if not gamma else gamma)]
             while True:
@@ -224,86 +175,50 @@ def generate_network(n, net_type, gamma=None, out_gamma=None):
             graph.remove_edges_from(nx.selfloop_edges(graph))
         case _:
             raise Exception("Missing network type")
-
     return graph
 
-
 def get_ranking_pagerank(graph: nx.Graph, alpha: float = 0.85) -> typing.Dict:
-    # Try igraph first
-    # igraph uses 'damping' instead of 'alpha'
     res = _igraph_centrality_wrapper(graph, "pagerank", damping=alpha)
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.pagerank(graph, alpha=alpha)
-
 
 def get_ranking_harmonic(graph: nx.Graph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "harmonic_centrality")
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.harmonic_centrality(graph)
 
-
 def get_ranking_eigenvector(graph: nx.Graph) -> typing.Dict:
-    # igraph eigenvector_centrality defaults to scale=True
     res = _igraph_centrality_wrapper(graph, "eigenvector_centrality", scale=False)
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.eigenvector_centrality_numpy(graph)
-
 
 def get_ranking_betweenness(graph: nx.Graph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "betweenness")
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.betweenness_centrality(graph)
 
-
 def get_ranking_load(graph: nx.Graph) -> typing.Dict:
-    # Load centrality is not standard in igraph (it's similar to betweenness but different).
-    # Keep NX for now.
     return nx.algorithms.load_centrality(graph)
 
-
 def get_ranking_degree(graph: nx.Graph) -> typing.Dict:
-    # igraph degree is raw degree. NX degree_centrality is normalized (degree / (N-1)).
-    # We must normalize igraph output to match NX.
-    # But wait, my wrapper returns raw scores for degree?
-    # Let's adjust wrapper or adjust here.
-    # Adjusting here is safer.
-
-    # Actually, for the purpose of ranking (ordering), normalization doesn't matter!
-    # The 'compare_centrality' function only cares about the order of nodes.
-    # However, if we ever compare raw values, it matters.
-    # The function name is 'get_ranking_*' but it returns a dict of values.
-    # The consuming code in main.py: compare_centrality sorts them.
-    # So relative order is all that matters.
-    # Raw degree and normalized degree have same order.
-
     res = _igraph_centrality_wrapper(graph, "degree")
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.degree_centrality(graph)
 
 def get_ranking_indegree(graph: nx.DiGraph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "indegree")
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.in_degree_centrality(graph)
 
 def get_ranking_outdegree(graph: nx.DiGraph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "outdegree")
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.out_degree_centrality(graph)
-
 
 def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "closeness")
-    if res is not None:
-        return res
+    if res is not None: return res
     return nx.algorithms.closeness_centrality(graph)
-
 
 def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
     if graph.is_multigraph():
@@ -311,17 +226,164 @@ def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
     alpha = 1./(2*max(graph.degree())[0])
     return nx.algorithms.katz_centrality_numpy(graph, alpha=alpha)
 
+def get_ranking(centrality: typing.AnyStr):
+    lookup = {
+        "betweenness": get_ranking_betweenness,
+        "closeness": get_ranking_closeness,
+        "harmonic": get_ranking_harmonic,
+        "pagerank": get_ranking_pagerank,
+        "degree": get_ranking_degree,
+        "load": get_ranking_load,
+        "katz": get_ranking_katz,
+        "eigenvector": get_ranking_eigenvector,
+        "indegree": get_ranking_indegree,
+        "outdegree": get_ranking_outdegree
+    }
+    for damping_factor in range(0,100):
+        lookup.update({f"pagerank-{damping_factor}": partial(get_ranking_pagerank, alpha=damping_factor/100)})
+    return lookup[centrality]
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
     with multiprocessing.Pool() as pool:
-        # Using map or imap might be cleaner, but starmap/map expects iterables.
-        # Since fn takes no arguments (it is a partial), we can just execute it `runs` times.
-        # However, pool.map needs an iterable.
-        # We can use apply_async in a list comp or loop, but context manager handles cleanup.
         async_results = [pool.apply_async(fn) for _ in range(runs)]
         results = [result.get() for result in async_results]
     return results
 
+def get_cached_files(config: Conf) -> typing.List[str]:
+    # Ensure cache directory exists
+    Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
+
+    # Construct search pattern
+    # Pattern: graph_{M}_{N}_cent_{suffix}_{index/uuid}.gpickle
+    # We use glob to find files starting with the prefix.
+    # Note: suffix can be empty.
+
+    prefix = f"graph_{config.M}_{config.N}_cent_{config.suffix}_"
+    pattern = path.join(config.cache_dir, f"{prefix}*.gpickle")
+
+    files = glob.glob(pattern)
+    files.sort() # Ensure deterministic order
+    return files
+
+def process_graph(index: int, config: Conf, cached_files: typing.List[str], all_centralities: typing.List[str]) -> str:
+    # This function is designed to be run in parallel (or serial)
+    # It ensures the graph at 'index' is ready (loaded/generated, centralities computed, saved).
+    # Returns the filename.
+
+    file_path = None
+    graph = None
+    modified = False
+
+    # Check if we can load an existing file
+    if config.load and index < len(cached_files):
+        file_path = cached_files[index]
+        try:
+            # We use nx.read_gpickle. Note: read_gpickle is deprecated in new NX versions?
+            # It was removed in 3.0. We should use standard pickle.
+            # But the requirement said "gpickle is acceptable".
+            # NX 3.2.1 is installed. read_gpickle is likely gone.
+            # Let's use pickle directly.
+            with open(file_path, 'rb') as f:
+                graph = pickle.load(f)
+        except Exception as e:
+            print(f"Failed to load {file_path}: {e}. Generating new graph.")
+            graph = None
+
+    if graph is None:
+        # Generate new graph
+        graph = config.generator()
+        modified = True
+        # If we generated a new graph, we need a new filename.
+        # We assign a UUID to ensure uniqueness.
+        unique_id = uuid.uuid4().hex
+        filename = f"graph_{config.M}_{config.N}_cent_{config.suffix}_{unique_id}.gpickle"
+        file_path = path.join(config.cache_dir, filename)
+
+    # Ensure centralities
+    for cent_name in all_centralities:
+        # Check if node attribute exists.
+        # We store them as f"centrality_{cent_name}"? Or just "{cent_name}"?
+        # The user said "saved as (node) parameter".
+        # Let's use a consistent key prefix to avoid collision with other attrs?
+        # "centrality_" seems safe.
+
+        # NOTE: Graph nodes might not be 0..N-1 in user data, but our generator ensures integers.
+        # The 'get_ranking' functions return dict {node_id: score}.
+
+        attr_key = f"centrality_{cent_name}"
+
+        # Check if attribute exists on first node (assuming homogeneous)
+        # Or check graph.nodes[0]
+        # Better: check if the key is in the first node's attributes.
+        sample_node = next(iter(graph.nodes()))
+        if attr_key not in graph.nodes[sample_node]:
+            # Compute
+            # print(f"Computing {cent_name} for graph {file_path}...")
+            ranking_func = get_ranking(cent_name)
+            scores = ranking_func(graph)
+
+            # scores is dict {node: score}
+            # Set attributes
+            # nx.set_node_attributes takes dict.
+            # We need to restructure scores?
+            # nx.set_node_attributes(G, values, name)
+            nx.set_node_attributes(graph, scores, attr_key)
+            modified = True
+
+    # Save if needed
+    if config.save and modified:
+        # Ensure dir exists (might be redundant but safe)
+        Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
+        with open(file_path, 'wb') as f:
+            pickle.dump(graph, f)
+
+    return file_path
+
+def get_normalized_total_orderings(baseline: typing.Union[typing.List, typing.Dict], other: typing.Union[typing.List, typing.Dict]) -> typing.List:
+    n = len(baseline)
+    if isinstance(baseline, dict):
+        baseline_arr = np.array([baseline[i] for i in range(n)])
+    else:
+        baseline_arr = np.array(baseline)
+
+    if isinstance(other, dict):
+        other_arr = np.array([other[i] for i in range(n)])
+    else:
+        other_arr = np.array(other)
+
+    random_arr = np.random.uniform(size=n)
+    indices = np.arange(n)
+
+    keys_baseline = (-random_arr, -other_arr, -baseline_arr)
+    normalized_baseline = indices[np.lexsort(keys_baseline)]
+
+    keys_other = (-random_arr, -baseline_arr, -other_arr)
+    normalized_other = indices[np.lexsort(keys_other)]
+
+    return [normalized_baseline.tolist(), normalized_other.tolist()]
+
+def compare_centrality(baseline: typing.List, ranking_other: typing.List) -> typing.Dict:
+    norm_baseline, norm_other = get_normalized_total_orderings(baseline, ranking_other)
+    n = len(baseline)
+    nb = np.array(norm_baseline)
+    no = np.array(norm_other)
+    seen_baseline = np.zeros(n, dtype=bool)
+    seen_other = np.zeros(n, dtype=bool)
+    overlap_count = 0
+    overlap_list = []
+
+    for i in range(n):
+        u = nb[i]
+        v = no[i]
+        seen_baseline[u] = True
+        if seen_other[u]:
+            overlap_count += 1
+        seen_other[v] = True
+        if seen_baseline[v]:
+            overlap_count += 1
+        overlap_list.append(overlap_count)
+
+    return {'overlap': overlap_list}
 
 def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typing.AnyStr, header: typing.AnyStr = None,
                  parabola: bool = False, zoom: bool = True, rescale: bool = False, note: typing.AnyStr = None) -> None:

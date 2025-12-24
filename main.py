@@ -1,120 +1,13 @@
 import typing
 from functools import partial
-
+import pickle
+import multiprocessing
 import numpy as np
 
 import library
 
-
-def get_normalized_total_orderings(baseline: typing.Union[typing.List, typing.Dict], other: typing.Union[typing.List, typing.Dict]) -> typing.List:
-    # Convert inputs to numpy arrays for speed
-    n = len(baseline)
-
-    # Check if inputs are dicts (mapping node_id -> score) or lists (index -> score)
-    # The original code assumed keys 0..N-1 existed.
-    if isinstance(baseline, dict):
-        # Extract values in order of keys 0..N-1
-        # This assumes keys are contiguous integers starting from 0, which matches the graph generation logic
-        # (convert_node_labels_to_integers is used in library.py)
-        baseline_arr = np.array([baseline[i] for i in range(n)])
-    else:
-        baseline_arr = np.array(baseline)
-
-    if isinstance(other, dict):
-        other_arr = np.array([other[i] for i in range(n)])
-    else:
-        other_arr = np.array(other)
-
-    # Generate random tie-breakers
-    random_arr = np.random.uniform(size=n)
-
-    # Create indices
-    indices = np.arange(n)
-
-    # Sort for baseline: primary key baseline (desc), secondary other (desc), tertiary random (desc)
-    # lexsort sorts by last key first. So we pass keys in reverse order of importance.
-    # We want descending sort, so we negate the values.
-    # keys: (-baseline, -other, -random)
-    # lexsort order: -random, -other, -baseline
-
-    keys_baseline = (-random_arr, -other_arr, -baseline_arr)
-    # Note: lexsort is stable.
-    normalized_baseline = indices[np.lexsort(keys_baseline)]
-
-    # Sort for other: primary key other (desc), secondary baseline (desc), tertiary random (desc)
-    keys_other = (-random_arr, -baseline_arr, -other_arr)
-    normalized_other = indices[np.lexsort(keys_other)]
-
-    return [normalized_baseline.tolist(), normalized_other.tolist()]
-
-
-def compare_centrality(baseline: typing.List, ranking_other: typing.List) -> typing.Dict:
-    norm_baseline, norm_other = get_normalized_total_orderings(baseline, ranking_other)
-
-    n = len(baseline)
-    # Convert to arrays for efficient processing
-    nb = np.array(norm_baseline)
-    no = np.array(norm_other)
-
-    # seen_baseline[x] is True if node x has appeared in norm_baseline[:current_step]
-    seen_baseline = np.zeros(n, dtype=bool)
-    # seen_other[x] is True if node x has appeared in norm_other[:current_step]
-    seen_other = np.zeros(n, dtype=bool)
-
-    overlap_count = 0
-    overlap_list = []
-
-    # Pre-allocate output list for performance if N is large?
-    # But python lists are dynamic. Appending is amortized O(1).
-    # Since we need to return a list, we can just append.
-
-    # It might be faster to do this loop in pure python if we can avoid overhead,
-    # or use numba. But just avoiding set intersections is the main win.
-
-    for i in range(n):
-        u = nb[i] # node at rank i in baseline
-        v = no[i] # node at rank i in other
-
-        # Add u to seen_baseline
-        seen_baseline[u] = True
-        # If u was already seen in other, it means we found a match (u is in both top-sets)
-        if seen_other[u]:
-            overlap_count += 1
-
-        # Add v to seen_other
-        seen_other[v] = True
-        # If v was already seen in baseline, match found
-        if seen_baseline[v]:
-            overlap_count += 1
-
-        # If u == v, we incremented twice (once for u in seen_other? No).
-        # if u == v:
-        #   seen_baseline[u] = True
-        #   if seen_other[u]: count++ (it's not true yet because we just set seen_other[v] below)
-
-        # Let's trace u==v case carefully.
-        # u == v.
-        # seen_baseline[u] = True.
-        # if seen_other[u]: (Assume False initially). No increment.
-        # seen_other[u] = True.
-        # if seen_baseline[u]: (True). Increment.
-        # Count increases by 1. Correct.
-
-        # Case u != v.
-        # u added to baseline. If u in other, ++.
-        # v added to other. If v in baseline, ++.
-        # If u was already in other (from previous steps), we count it.
-        # If v was already in baseline (from previous steps), we count it.
-        # What if u and v are just appearing now?
-        # u is new in baseline. v is new in other.
-        # if u is in other (must be from prev steps).
-        # if v is in baseline (must be from prev steps).
-        # Correct.
-
-        overlap_list.append(overlap_count)
-
-    return {'overlap': overlap_list}
-
+# Note: compare_centrality and related functions have been moved to library.py
+# We can import them if needed, or rely on library calls.
 
 def plot_overlap(results: typing.List, baseline: typing.AnyStr, centrality: typing.AnyStr, zoom: bool = True,
                  note: typing.AnyStr = None) -> None:
@@ -124,50 +17,162 @@ def plot_overlap(results: typing.List, baseline: typing.AnyStr, centrality: typi
 
 
 def get_ranking(centrality: typing.AnyStr):
-    lookup = {
-        "betweenness": library.get_ranking_betweenness,
-        "closeness": library.get_ranking_closeness,
-        "harmonic": library.get_ranking_harmonic,
-        "pagerank": library.get_ranking_pagerank,
-        "degree": library.get_ranking_degree,
-        "load": library.get_ranking_load,
-        "katz": library.get_ranking_katz,
-        "eigenvector": library.get_ranking_eigenvector,
-        "indegree": library.get_ranking_indegree,
-        "outdegree": library.get_ranking_outdegree
-    }
-    for damping_factor in range(0,100):
-        lookup.update({f"pagerank-{damping_factor}": partial(library.get_ranking_pagerank, alpha=damping_factor/100)})
-
-    return lookup[centrality]
+    # This function is also in library.py now, but main.py might use it.
+    # However, if we use the cache workflow, we don't call this directly from main usually.
+    # But for non-cache workflow, we still need it.
+    # Let's delegate to library.
+    return library.get_ranking(centrality)
 
 
-def simulate_one_scenario(in_centrality1: typing.AnyStr, in_centrality2: typing.AnyStr, in_configuration: typing.NamedTuple):
+def simulate_one_scenario(in_centrality1: typing.AnyStr, in_centrality2: typing.AnyStr, in_configuration: typing.NamedTuple, run_index: int = None, cached_files: typing.List[str] = None):
+    # If using cache, we load the graph.
+    if in_configuration.cache and cached_files is not None and run_index is not None and run_index < len(cached_files):
+        file_path = cached_files[run_index]
+        try:
+            with open(file_path, 'rb') as f:
+                graph = pickle.load(f)
+
+            # Extract precomputed centralities
+            # We assume they are stored as "centrality_{name}"
+            # get_ranking returns dict {node: score}
+            # The node attribute stores the score.
+            # We need to reconstruct the dict from node attributes.
+
+            # Verify centralities exist
+            c1_key = f"centrality_{in_centrality1}"
+            c2_key = f"centrality_{in_centrality2}"
+
+            # We need to construct the dictionary expected by compare_centrality
+            # {node_id: score}
+            # Since nodes are 0..N-1, we can just extract them.
+
+            # Check if graph has nodes (it should).
+            # If large graph, this extraction might be slow?
+            # Iterating over nodes: O(N). compare_centrality is O(N log N). Acceptable.
+
+            # Note: graph.nodes(data=True) returns (node, attributes).
+
+            c1_scores = {n: d.get(c1_key) for n, d in graph.nodes(data=True)}
+            c2_scores = {n: d.get(c2_key) for n, d in graph.nodes(data=True)}
+
+            # If any is None (missing), we might need to compute?
+            # But process_graph should have computed them.
+            # If they are missing, it's an error in process_graph or configuration mismatch.
+            # For robustness, we could fallback to compute, but let's assume they exist.
+
+            return library.compare_centrality(c1_scores, c2_scores)
+
+        except Exception as e:
+            print(f"Error loading/processing cached graph {file_path}: {e}. Falling back to generation.")
+            # Fallback to generation below
+            pass
+
+    # Default behavior (no cache or fallback)
     graph = in_configuration.generator()
-    return compare_centrality(get_ranking(in_centrality1)(graph), get_ranking(in_centrality2)(graph))
+    return library.compare_centrality(get_ranking(in_centrality1)(graph), get_ranking(in_centrality2)(graph))
 
 
 def run_comparing_sim(runs: int, centrality1: typing.AnyStr, centrality2: typing.AnyStr, configuration: typing.NamedTuple,
-                      note: typing.AnyStr = None, parallel: bool = True) -> None:
+                      note: typing.AnyStr = None, parallel: bool = True, cached_files: typing.List[str] = None) -> None:
 
     print(f'Running: {centrality1} vs. {centrality2}, conffile: {configuration.name}')
+
+    # We pass run_index to simulate_one_scenario
+    # If parallel, we need to pass arguments correctly.
+    # partial can fix some args, but we need varying run_index.
+
+    tasks = []
+    for i in range(runs):
+        tasks.append(partial(simulate_one_scenario, centrality1, centrality2, configuration, run_index=i, cached_files=cached_files))
+
     if not parallel:
-        sim_results = []
-        for i in range(runs):
-            sim_results.append(simulate_one_scenario(centrality1, centrality2, configuration))
+        sim_results = [task() for task in tasks]
     else:
-        sim_results = library.run_in_parallel(runs, partial(simulate_one_scenario, centrality1, centrality2, configuration))
+        # library.run_in_parallel expects a function that takes 0 args?
+        # library.run_in_parallel signature: (runs, fn). It runs fn() 'runs' times.
+        # But we need specific arguments for each run (the index).
+        # library.run_in_parallel is implemented as: [pool.apply_async(fn) for _ in range(runs)].
+        # It calls the SAME function 'runs' times.
+        # This works for random generation (fresh seed/state).
+        # But for caching, we need 'i'.
+
+        # We need to modify how we call parallel execution or use a different helper.
+        # Since we are modifying main.py, we can just use multiprocessing directly here or update library.run_in_parallel.
+        # Updating library.run_in_parallel to accept a list of functions would be better.
+        # Or just do it here.
+
+        with multiprocessing.Pool() as pool:
+            # tasks is a list of partials.
+            # pool.map(lambda f: f(), tasks) ?
+            # tasks are not picklable if they contain local functions? Partial is picklable.
+
+            # Simpler: map an index.
+            worker = partial(simulate_one_scenario, centrality1, centrality2, configuration, cached_files=cached_files)
+            # Worker takes (run_index=...) as kwarg? No, map passes positional.
+            # simulate_one_scenario(c1, c2, conf, index, files)
+
+            # We need a wrapper to adapt arguments for map.
+            # Or use starmap.
+
+            # Let's define a worker helper (top level for picklability)
+            # But simulate_one_scenario is top level.
+            # We can use starmap.
+            pass
+
+            args = [(centrality1, centrality2, configuration, i, cached_files) for i in range(runs)]
+            sim_results = pool.starmap(simulate_one_scenario, args)
+
     results = {'overlap': [res['overlap'] for res in sim_results]}
     plot_overlap(results['overlap'], baseline=centrality1, centrality=centrality2, zoom=False, note=note)
 
 
+import sys
+
 def main():
 
-    all_conf_files = ['example_config.ini']
+    if len(sys.argv) > 1:
+        all_conf_files = sys.argv[1:]
+    else:
+        all_conf_files = ['example_config.ini']
+
     for conf_file in all_conf_files:
         configuration = library.get_config_from_ini(conf_file)
+
+        cached_files = None
+        if configuration.cache:
+            print("Caching enabled. Preparing graphs...")
+            # 1. Identify all required centralities
+            all_centralities = set()
+            for pair in configuration.centralities:
+                all_centralities.add(pair[0])
+                all_centralities.add(pair[1])
+            all_centralities = list(all_centralities)
+
+            # 2. Get existing files
+            existing_files = library.get_cached_files(configuration)
+            print(f"Found {len(existing_files)} existing files in cache.")
+
+            # 3. Process graphs (Load/Generate -> Compute -> Save)
+            # We need 'runs' graphs.
+            # If runs > existing, we generate new ones.
+            # If runs <= existing, we use the first 'runs' files (or all? usually runs).
+
+            # We launch parallel processing to ensure they are ready.
+            # Function: library.process_graph(index, config, cached_files, all_centralities)
+            # We need to map indices 0..runs-1
+
+            # NOTE: library.process_graph returns the filename.
+            # We want to collect these filenames.
+
+            process_args = [(i, configuration, existing_files, all_centralities) for i in range(configuration.runs)]
+
+            with multiprocessing.Pool() as pool:
+                cached_files = pool.starmap(library.process_graph, process_args)
+
+            print(f"Prepared {len(cached_files)} graphs.")
+
         for centrality_pair in configuration.centralities:
-            run_comparing_sim(configuration.runs, centrality_pair[0], centrality_pair[1], configuration, note=configuration.note, parallel=True)
+            run_comparing_sim(configuration.runs, centrality_pair[0], centrality_pair[1], configuration, note=configuration.note, parallel=True, cached_files=cached_files)
             print(f"Completed simulation for {centrality_pair[0]} vs. {centrality_pair[1]}, configuration: {conf_file}")
 
 

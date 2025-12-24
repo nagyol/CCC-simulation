@@ -11,7 +11,7 @@ def benchmark_overlap(n=10000):
     other = np.random.random(n).tolist()
 
     start = time.time()
-    main.compare_centrality(baseline, other)
+    library.compare_centrality(baseline, other)
     end = time.time()
     print(f"Overlap calculation time: {end - start:.4f}s")
 
