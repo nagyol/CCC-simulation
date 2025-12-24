@@ -268,21 +268,19 @@ def get_cached_files(config: Conf) -> typing.List[str]:
 def process_graph(index: int, config: Conf, cached_files: typing.List[str], all_centralities: typing.List[str]) -> str:
     # This function is designed to be run in parallel (or serial)
     # It ensures the graph at 'index' is ready (loaded/generated, centralities computed, saved).
-    # Returns the filename.
+    # Returns the filename of the graph topology.
 
     file_path = None
     graph = None
-    modified = False
+    modified_graph = False
+
+    # Ensure cache dir exists
+    Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
 
     # Check if we can load an existing file
     if config.load and index < len(cached_files):
         file_path = cached_files[index]
         try:
-            # We use nx.read_gpickle. Note: read_gpickle is deprecated in new NX versions?
-            # It was removed in 3.0. We should use standard pickle.
-            # But the requirement said "gpickle is acceptable".
-            # NX 3.2.1 is installed. read_gpickle is likely gone.
-            # Let's use pickle directly.
             with open(file_path, 'rb') as f:
                 graph = pickle.load(f)
         except Exception as e:
@@ -292,48 +290,51 @@ def process_graph(index: int, config: Conf, cached_files: typing.List[str], all_
     if graph is None:
         # Generate new graph
         graph = config.generator()
-        modified = True
+        modified_graph = True
         # If we generated a new graph, we need a new filename.
         # We assign a UUID to ensure uniqueness.
         unique_id = uuid.uuid4().hex
         filename = f"graph_{config.M}_{config.N}_cent_{config.suffix}_{unique_id}.gpickle"
         file_path = path.join(config.cache_dir, filename)
 
+    # Base name for centrality files: matches graph filename but with .npy extension and suffix
+    # file_path is like .../graph_..._uuid.gpickle
+    # We want .../graph_..._uuid_centrality_{name}.npy
+    base_name = path.splitext(path.basename(file_path))[0]
+
     # Ensure centralities
     for cent_name in all_centralities:
-        # Check if node attribute exists.
-        # We store them as f"centrality_{cent_name}"? Or just "{cent_name}"?
-        # The user said "saved as (node) parameter".
-        # Let's use a consistent key prefix to avoid collision with other attrs?
-        # "centrality_" seems safe.
+        npy_filename = f"{base_name}_centrality_{cent_name}.npy"
+        npy_path = path.join(config.cache_dir, npy_filename)
 
-        # NOTE: Graph nodes might not be 0..N-1 in user data, but our generator ensures integers.
-        # The 'get_ranking' functions return dict {node_id: score}.
-
-        attr_key = f"centrality_{cent_name}"
-
-        # Check if attribute exists on first node (assuming homogeneous)
-        # Or check graph.nodes[0]
-        # Better: check if the key is in the first node's attributes.
-        sample_node = next(iter(graph.nodes()))
-        if attr_key not in graph.nodes[sample_node]:
+        if not path.exists(npy_path):
             # Compute
             # print(f"Computing {cent_name} for graph {file_path}...")
             ranking_func = get_ranking(cent_name)
-            scores = ranking_func(graph)
+            scores_dict = ranking_func(graph)
 
-            # scores is dict {node: score}
-            # Set attributes
-            # nx.set_node_attributes takes dict.
-            # We need to restructure scores?
-            # nx.set_node_attributes(G, values, name)
-            nx.set_node_attributes(graph, scores, attr_key)
-            modified = True
+            # Convert to array assuming nodes are 0..N-1
+            # We assume the graph has N nodes labeled 0 to N-1
+            # If not, we might have issues, but generator ensures integer labels.
+            # We sort by node ID to ensure consistency.
 
-    # Save if needed
-    if config.save and modified:
-        # Ensure dir exists (might be redundant but safe)
-        Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
+            # Fast conversion
+            # If nodes are exactly range(N):
+            if graph.number_of_nodes() > 0:
+                scores_arr = np.array([scores_dict[i] for i in range(graph.number_of_nodes())])
+            else:
+                scores_arr = np.array([])
+
+            np.save(npy_path, scores_arr)
+
+            # NOTE: We do NOT add attributes to the graph object anymore to keep it lightweight.
+            # If the user wants the graph saved with centralities, we deviate here for performance.
+            # Requirement: "graph itself should remain saved ... so that new centralities can be added"
+            # We accomplish this by keeping the gpickle (topology) and adding new .npy files as needed.
+
+    # Save graph topology if needed (only if new or modified)
+    # If we just computed centralities but didn't change graph topology, we don't need to save graph unless it's new.
+    if config.save and modified_graph:
         with open(file_path, 'wb') as f:
             pickle.dump(graph, f)
 
@@ -365,25 +366,30 @@ def get_normalized_total_orderings(baseline: typing.Union[typing.List, typing.Di
 def compare_centrality(baseline: typing.List, ranking_other: typing.List) -> typing.Dict:
     norm_baseline, norm_other = get_normalized_total_orderings(baseline, ranking_other)
     n = len(baseline)
-    nb = np.array(norm_baseline)
-    no = np.array(norm_other)
-    seen_baseline = np.zeros(n, dtype=bool)
-    seen_other = np.zeros(n, dtype=bool)
-    overlap_count = 0
-    overlap_list = []
 
-    for i in range(n):
-        u = nb[i]
-        v = no[i]
-        seen_baseline[u] = True
-        if seen_other[u]:
-            overlap_count += 1
-        seen_other[v] = True
-        if seen_baseline[v]:
-            overlap_count += 1
-        overlap_list.append(overlap_count)
+    # Vectorized approach
+    # norm_baseline[i] = node_id at rank i in baseline
+    # We want rank_in_baseline[node_id]
 
-    return {'overlap': overlap_list}
+    inv_nb = np.zeros(n, dtype=int)
+    inv_nb[norm_baseline] = np.arange(n)
+
+    inv_no = np.zeros(n, dtype=int)
+    inv_no[norm_other] = np.arange(n)
+
+    # For a node to be in the overlap set at step k (0-indexed),
+    # it must have rank <= k in BOTH rankings.
+    # So max(rank_baseline, rank_other) <= k.
+
+    max_ranks = np.maximum(inv_nb, inv_no)
+
+    # We want to count how many nodes have max_rank <= k for each k.
+    # We can use bincount to get counts of nodes with max_rank == k.
+
+    counts = np.bincount(max_ranks, minlength=n)
+    overlap_list = np.cumsum(counts)
+
+    return {'overlap': overlap_list.tolist()}
 
 def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typing.AnyStr, header: typing.AnyStr = None,
                  parabola: bool = False, zoom: bool = True, rescale: bool = False, note: typing.AnyStr = None) -> None:

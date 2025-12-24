@@ -25,50 +25,39 @@ def get_ranking(centrality: typing.AnyStr):
 
 
 def simulate_one_scenario(in_centrality1: typing.AnyStr, in_centrality2: typing.AnyStr, in_configuration: typing.NamedTuple, run_index: int = None, cached_files: typing.List[str] = None):
-    # If using cache, we load the graph.
+    # If using cache, we use the .npy files corresponding to the graph
     if in_configuration.cache and cached_files is not None and run_index is not None and run_index < len(cached_files):
         file_path = cached_files[run_index]
         try:
-            with open(file_path, 'rb') as f:
-                graph = pickle.load(f)
+            # We don't load the graph anymore! Speed up!
+            # We just need the centrality arrays.
+            # Filename convention: {base}_centrality_{name}.npy
 
-            # Extract precomputed centralities
-            # We assume they are stored as "centrality_{name}"
-            # get_ranking returns dict {node: score}
-            # The node attribute stores the score.
-            # We need to reconstruct the dict from node attributes.
+            import os
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
 
-            # Verify centralities exist
-            c1_key = f"centrality_{in_centrality1}"
-            c2_key = f"centrality_{in_centrality2}"
+            npy1 = os.path.join(in_configuration.cache_dir, f"{base_name}_centrality_{in_centrality1}.npy")
+            npy2 = os.path.join(in_configuration.cache_dir, f"{base_name}_centrality_{in_centrality2}.npy")
 
-            # We need to construct the dictionary expected by compare_centrality
-            # {node_id: score}
-            # Since nodes are 0..N-1, we can just extract them.
+            # Load arrays
+            # We assume these exist because process_graph ensured it.
+            c1_scores = np.load(npy1)
+            c2_scores = np.load(npy2)
 
-            # Check if graph has nodes (it should).
-            # If large graph, this extraction might be slow?
-            # Iterating over nodes: O(N). compare_centrality is O(N log N). Acceptable.
-
-            # Note: graph.nodes(data=True) returns (node, attributes).
-
-            c1_scores = {n: d.get(c1_key) for n, d in graph.nodes(data=True)}
-            c2_scores = {n: d.get(c2_key) for n, d in graph.nodes(data=True)}
-
-            # If any is None (missing), we might need to compute?
-            # But process_graph should have computed them.
-            # If they are missing, it's an error in process_graph or configuration mismatch.
-            # For robustness, we could fallback to compute, but let's assume they exist.
+            # compare_centrality expects list or dict. Array is list-like.
+            # It accepts ndarray if we verify library.py handles it.
+            # library.get_normalized_total_orderings handles array input.
 
             return library.compare_centrality(c1_scores, c2_scores)
 
         except Exception as e:
-            print(f"Error loading/processing cached graph {file_path}: {e}. Falling back to generation.")
+            print(f"Error loading cached centralities for {file_path}: {e}. Falling back to generation.")
             # Fallback to generation below
             pass
 
     # Default behavior (no cache or fallback)
     graph = in_configuration.generator()
+    # When generating fresh, we get dicts.
     return library.compare_centrality(get_ranking(in_centrality1)(graph), get_ranking(in_centrality2)(graph))
 
 
