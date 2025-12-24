@@ -161,3 +161,9 @@ cython_debug/
 
 example_config.ini
 *.ini
+results/
+cache/
+__pycache__/
+results/
+cache/
+__pycache__/
