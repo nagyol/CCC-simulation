@@ -190,7 +190,8 @@ def get_ranking_harmonic(graph: nx.Graph) -> typing.Dict:
 def get_ranking_eigenvector(graph: nx.Graph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "eigenvector_centrality", scale=False)
     if res is not None: return res
-    return nx.algorithms.eigenvector_centrality_numpy(graph)
+    # Use iterative fallback to avoid OOM on large graphs
+    return nx.algorithms.eigenvector_centrality(graph)
 
 def get_ranking_betweenness(graph: nx.Graph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "betweenness")
@@ -224,7 +225,8 @@ def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
     if graph.is_multigraph():
         graph = nx.DiGraph(graph)
     alpha = 1./(2*max(graph.degree())[0])
-    return nx.algorithms.katz_centrality_numpy(graph, alpha=alpha)
+    # Use iterative solver to avoid OOM on large graphs (numpy version is dense)
+    return nx.algorithms.katz_centrality(graph, alpha=alpha)
 
 def get_ranking(centrality: typing.AnyStr):
     lookup = {
