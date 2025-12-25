@@ -12,16 +12,8 @@ from itertools import combinations
 from pathlib import Path
 from os import path
 
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import networkx as nx
 import numpy as np
-
-try:
-    matplotlib.use("TkAgg")
-except ImportError:
-    matplotlib.use("Agg")
 
 try:
     import igraph as ig
@@ -395,6 +387,13 @@ def compare_centrality(baseline: typing.List, ranking_other: typing.List) -> typ
 
 def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typing.AnyStr, header: typing.AnyStr = None,
                  parabola: bool = False, zoom: bool = True, rescale: bool = False, note: typing.AnyStr = None) -> None:
+    # Delayed import to avoid issues with multiprocessing and backend configuration
+    import matplotlib
+    # Force Agg backend for headless environments/clusters
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as ticker
+
     if isinstance(results[0], list):
         mean = np.mean(np.array(results), axis=0)
         error = np.std(np.array(results), axis=0)
