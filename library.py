@@ -401,20 +401,28 @@ def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typi
         mean = results
         error = 0
 
-    plt.errorbar(range(1, 1 + len(mean)), mean, yerr=(error if len(results) > 1 else None), ecolor='r', capsize=5,
+    # Use Object-Oriented API to avoid global state issues and RecursionError
+    fig, ax = plt.subplots()
+
+    ax.errorbar(range(1, 1 + len(mean)), mean, yerr=(error if len(results) > 1 else None), ecolor='r', capsize=5,
                  linestyle='none', marker='x',
                  markersize=2)
-    if zoom:
-        plt.title(
-            f"{header} {baseline} vs. {centrality} \n Runs:{len(results)}, graph size: {len(mean)}, top 10% of vertices \n {note}")
-        plt.xlim(1, 1 + (len(mean) / 10))
-        plt.savefig(f"{datetime.datetime.now()}-{baseline}-{centrality}-top10p.pdf")
 
-    plt.title(
+    if zoom:
+        ax.set_title(
+            f"{header} {baseline} vs. {centrality} \n Runs:{len(results)}, graph size: {len(mean)}, top 10% of vertices \n {note}")
+        ax.set_xlim(1, 1 + (len(mean) / 10))
+        # Note: saving directly here might be problematic if we want to reuse the figure,
+        # but the original code saved distinct files.
+        # We'll save and continue.
+        fig.savefig(f"{datetime.datetime.now()}-{baseline}-{centrality}-top10p.pdf")
+
+    ax.set_title(
         f"{header} {baseline} vs. {centrality} \n Runs:{len(results)}, graph size: {len(mean)}, all vertices  \n {note}")
-    plt.xlim(0, len(mean))
-    plt.ylim(0, len(mean))
-    ax = plt.gca()
+    ax.set_xlim(0, len(mean))
+    ax.set_ylim(0, len(mean))
+
+    # Add diagonal line
     ax.plot(ax.get_xlim(), ax.get_ylim(), ls="--", c=".3")
 
     if parabola:
@@ -430,6 +438,6 @@ def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typi
     Path("./results").mkdir(parents=True, exist_ok=True)
     filename = fr"{baseline}-{centrality}-{datetime.datetime.now():%Y-%m-%d-%H%M%S}.pdf"
     destination = path.join(path.abspath("results"), filename)
-    plt.savefig(destination)
+    fig.savefig(destination)
 
-    plt.clf()
+    plt.close(fig)
