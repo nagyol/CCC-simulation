@@ -92,7 +92,25 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
             centralities.append(f"pagerank-{i}")
             all_scenarios = list(combinations(centralities, 2))
     else:
-        centralities = [x.strip() for x in simulation["centralities"].split(',')]
+        raw_centralities = [x.strip() for x in simulation["centralities"].split(',')]
+        centralities = []
+        for c in raw_centralities:
+            if c == "betweenness1-Q":
+                if "Q" in simulation:
+                    Q_val = int(simulation["Q"])
+                    for i in range(1, Q_val + 1):
+                        centralities.append(f"betweenness-{i}")
+                else:
+                    print("Warning: betweenness1-Q requested but Q not defined in SIMULATION.")
+            elif c == "closeness1-Q":
+                if "Q" in simulation:
+                    Q_val = int(simulation["Q"])
+                    for i in range(1, Q_val + 1):
+                        centralities.append(f"closeness-{i}")
+                else:
+                    print("Warning: closeness1-Q requested but Q not defined in SIMULATION.")
+            else:
+                centralities.append(c)
         all_scenarios = list(combinations(centralities, 2))
     runs = int(simulation["runs"])
 
@@ -185,9 +203,11 @@ def get_ranking_eigenvector(graph: nx.Graph) -> typing.Dict:
     # Use iterative fallback to avoid OOM on large graphs
     return nx.algorithms.eigenvector_centrality(graph)
 
-def get_ranking_betweenness(graph: nx.Graph) -> typing.Dict:
-    res = _igraph_centrality_wrapper(graph, "betweenness")
+def get_ranking_betweenness(graph: nx.Graph, cutoff: int = None) -> typing.Dict:
+    res = _igraph_centrality_wrapper(graph, "betweenness", cutoff=cutoff)
     if res is not None: return res
+    if cutoff is not None:
+        print(f"Warning: NetworkX does not support cutoff for betweenness. Ignoring cutoff={cutoff}.")
     return nx.algorithms.betweenness_centrality(graph)
 
 def get_ranking_load(graph: nx.Graph) -> typing.Dict:
@@ -208,9 +228,11 @@ def get_ranking_outdegree(graph: nx.DiGraph) -> typing.Dict:
     if res is not None: return res
     return nx.algorithms.out_degree_centrality(graph)
 
-def get_ranking_closeness(graph: nx.Graph) -> typing.Dict:
-    res = _igraph_centrality_wrapper(graph, "closeness")
+def get_ranking_closeness(graph: nx.Graph, cutoff: int = None) -> typing.Dict:
+    res = _igraph_centrality_wrapper(graph, "closeness", cutoff=cutoff)
     if res is not None: return res
+    if cutoff is not None:
+        print(f"Warning: NetworkX does not support cutoff for closeness. Ignoring cutoff={cutoff}.")
     return nx.algorithms.closeness_centrality(graph)
 
 def get_ranking_katz(graph: nx.Graph) -> typing.Dict:
@@ -235,6 +257,25 @@ def get_ranking(centrality: typing.AnyStr):
     }
     for damping_factor in range(0,100):
         lookup.update({f"pagerank-{damping_factor}": partial(get_ranking_pagerank, alpha=damping_factor/100)})
+
+    if centrality in lookup:
+        return lookup[centrality]
+
+    # Dynamic parsing for betweenness-Y and closeness-Y
+    if centrality.startswith("betweenness-"):
+        try:
+            cutoff = int(centrality.split("-")[1])
+            return partial(get_ranking_betweenness, cutoff=cutoff)
+        except ValueError:
+            pass
+
+    if centrality.startswith("closeness-"):
+        try:
+            cutoff = int(centrality.split("-")[1])
+            return partial(get_ranking_closeness, cutoff=cutoff)
+        except ValueError:
+            pass
+
     return lookup[centrality]
 
 def run_in_parallel(runs: int, fn: typing.Callable) -> typing.List:
