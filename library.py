@@ -21,7 +21,7 @@ try:
 except ImportError:
     HAS_IGRAPH = False
 
-Conf = namedtuple('Conf', 'generator note name centralities suffix runs cache save load cache_dir N M')
+Conf = namedtuple('Conf', 'generator note name centralities suffix runs cache save load cache_dir N M only_compute max_processes')
 
 def nx_to_igraph(graph: typing.Union[nx.Graph, nx.DiGraph]) -> "ig.Graph":
     if not HAS_IGRAPH:
@@ -123,7 +123,12 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
     graph_generator = partial(generate_network, vertex_count, graph_model, gamma, out_gamma)
     full_note = f'{note}{("" if suffix == "" else "-")}{suffix}'
 
-    return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs, cache, save, load, cache_dir, vertex_count, graph_model)
+    only_compute = simulation.getboolean("only_compute", fallback=False)
+    max_processes = simulation.get("max_processes", fallback=None)
+    if max_processes is not None:
+        max_processes = int(max_processes)
+
+    return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs, cache, save, load, cache_dir, vertex_count, graph_model, only_compute, max_processes)
 
 def generate_network(n, net_type, gamma=None, out_gamma=None):
     match net_type:
