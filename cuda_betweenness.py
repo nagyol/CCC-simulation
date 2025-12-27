@@ -4,6 +4,7 @@ import multiprocessing
 import subprocess
 import glob
 import pickle
+import traceback
 import numpy as np
 import networkx as nx
 from functools import partial
@@ -55,6 +56,46 @@ def init_worker(gpu_queue):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     # print(f"Worker process {os.getpid()} using GPU {gpu_id}")
 
+def print_debug_info():
+    print("=== Debug Info ===")
+    print(f"NetworkX version: {nx.__version__}")
+    print(f"NumPy version: {np.__version__}")
+
+    try:
+        import cugraph
+        print(f"cugraph version: {cugraph.__version__}")
+    except ImportError:
+        print("cugraph not installed")
+
+    try:
+        import cupy
+        print(f"cupy version: {cupy.__version__}")
+        print(f"CUPY_CACHE_DIR: {os.environ.get('CUPY_CACHE_DIR', 'Not Set')}")
+    except ImportError:
+        print("cupy not installed")
+
+    print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not Set')}")
+    print("==================")
+
+def smoke_test():
+    print("=== Running Smoke Test ===")
+    if not HAS_CUGRAPH:
+        print("Skipping smoke test (cugraph not detected)")
+        return
+
+    try:
+        print("Creating small test graph...")
+        G = nx.Graph()
+        G.add_edges_from([(0, 1), (1, 2), (2, 0)])
+
+        print("Running betweenness_centrality with backend='cugraph'...")
+        bc = nx.betweenness_centrality(G, backend="cugraph")
+        print(f"Smoke test passed. Result: {bc}")
+    except Exception:
+        print("Smoke test FAILED with exception:")
+        traceback.print_exc()
+    print("==========================")
+
 def process_graph(file_path, cache_dir):
     """
     Worker task to process a single graph file.
@@ -99,9 +140,18 @@ def process_graph(file_path, cache_dir):
 
     except Exception as e:
         print(f"Failed to process {file_path}: {e}")
+        traceback.print_exc()
+        # Specific check for the malformed CompileException
+        if "CompileException.__init__() missing" in str(e):
+             print("\n!!! DIAGNOSIS: It appears a CUDA compilation error occurred, but the exception was malformed.")
+             print("This often indicates a mismatch between cupy/cugraph versions or a CUDA environment issue.")
+             print("Please check your CUDA installation and cupy/cugraph compatibility.\n")
         # We don't want to kill the pool, but we should report.
 
 def main():
+    print_debug_info()
+    smoke_test()
+
     if not HAS_CUGRAPH:
         print("Error: cugraph module not found. Please install cugraph and ensure dependencies are met.")
         # We allow running without cugraph IF we are just testing logic (handled via mocks in tests),
