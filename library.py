@@ -323,80 +323,6 @@ def get_cached_files(config: Conf) -> typing.List[str]:
     files.sort() # Ensure deterministic order
     return files
 
-def process_graph(index: int, config: Conf, cached_files: typing.List[str], all_centralities: typing.List[str]) -> str:
-    # This function is designed to be run in parallel (or serial)
-    # It ensures the graph at 'index' is ready (loaded/generated, centralities computed, saved).
-    # Returns the filename of the graph topology.
-
-    file_path = None
-    graph = None
-    modified_graph = False
-
-    # Ensure cache dir exists
-    Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
-
-    # Check if we can load an existing file
-    if config.load and index < len(cached_files):
-        file_path = cached_files[index]
-        try:
-            with open(file_path, 'rb') as f:
-                graph = pickle.load(f)
-        except Exception as e:
-            print(f"Failed to load {file_path}: {e}. Generating new graph.")
-            graph = None
-
-    if graph is None:
-        # Generate new graph
-        graph = config.generator()
-        modified_graph = True
-        # If we generated a new graph, we need a new filename.
-        # We assign a UUID to ensure uniqueness.
-        unique_id = uuid.uuid4().hex
-        filename = f"graph_{config.M}_{config.N}_cent_{config.suffix}_{unique_id}.gpickle"
-        file_path = path.join(config.cache_dir, filename)
-
-    # Base name for centrality files: matches graph filename but with .npy extension and suffix
-    # file_path is like .../graph_..._uuid.gpickle
-    # We want .../graph_..._uuid_centrality_{name}.npy
-    base_name = path.splitext(path.basename(file_path))[0]
-
-    # Ensure centralities
-    for cent_name in all_centralities:
-        npy_filename = f"{base_name}_centrality_{cent_name}.npy"
-        npy_path = path.join(config.cache_dir, npy_filename)
-
-        if not path.exists(npy_path):
-            # Compute
-            # print(f"Computing {cent_name} for graph {file_path}...")
-            ranking_func = get_ranking(cent_name)
-            scores_dict = ranking_func(graph)
-
-            # Convert to array assuming nodes are 0..N-1
-            # We assume the graph has N nodes labeled 0 to N-1
-            # If not, we might have issues, but generator ensures integer labels.
-            # We sort by node ID to ensure consistency.
-
-            # Fast conversion
-            # If nodes are exactly range(N):
-            if graph.number_of_nodes() > 0:
-                scores_arr = np.array([scores_dict[i] for i in range(graph.number_of_nodes())])
-            else:
-                scores_arr = np.array([])
-
-            np.save(npy_path, scores_arr)
-
-            # NOTE: We do NOT add attributes to the graph object anymore to keep it lightweight.
-            # If the user wants the graph saved with centralities, we deviate here for performance.
-            # Requirement: "graph itself should remain saved ... so that new centralities can be added"
-            # We accomplish this by keeping the gpickle (topology) and adding new .npy files as needed.
-
-    # Save graph topology if needed (only if new or modified)
-    # If we just computed centralities but didn't change graph topology, we don't need to save graph unless it's new.
-    if config.save and modified_graph:
-        with open(file_path, 'wb') as f:
-            pickle.dump(graph, f)
-
-    return file_path
 
 def get_normalized_total_orderings(baseline: typing.Union[typing.List, typing.Dict], other: typing.Union[typing.List, typing.Dict]) -> typing.List:
     n = len(baseline)
@@ -505,3 +431,74 @@ def plot_general(results: typing.List, baseline: typing.AnyStr, centrality: typi
     fig.savefig(destination)
 
     plt.close(fig)
+
+def ensure_graph_topology(index: int, config: Conf, cached_files: typing.List[str]) -> typing.Tuple[str, typing.Optional[nx.Graph]]:
+    """
+    Ensures that a graph exists for the given index.
+    If loading from cache, returns the path and None.
+    If generating, returns the path and the graph object (if not saved) or None (if saved).
+
+    Returns:
+        Tuple[str, Optional[nx.Graph]]: (file_path, graph_object_or_None)
+    """
+    # Ensure cache dir exists
+    Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
+
+    file_path = None
+    graph = None
+
+    # Check if we can load an existing file
+    if config.load and index < len(cached_files):
+        file_path = cached_files[index]
+        # We don't load the graph here. The worker will load it if needed.
+        return file_path, None
+
+    # Generate new graph
+    graph = config.generator()
+
+    # We assign a UUID to ensure uniqueness.
+    unique_id = uuid.uuid4().hex
+    filename = f"graph_{config.M}_{config.N}_cent_{config.suffix}_{unique_id}.gpickle"
+    file_path = path.join(config.cache_dir, filename)
+
+    if config.save:
+        with open(file_path, 'wb') as f:
+            pickle.dump(graph, f)
+        # Graph saved, we don't need to pass it back in memory
+        return file_path, None
+    else:
+        # Graph not saved, we must pass it back
+        return file_path, graph
+
+def compute_centrality_for_graph(file_path: str, graph_obj: typing.Optional[nx.Graph], centrality_name: str, config: Conf) -> None:
+    """
+    Computes a specific centrality for a graph.
+    If graph_obj is None, loads from file_path.
+    Saves result to .npy file.
+    """
+    # Base name for centrality files matches graph filename but with .npy extension
+    base_name = path.splitext(path.basename(file_path))[0]
+    npy_filename = f"{base_name}_centrality_{centrality_name}.npy"
+    npy_path = path.join(config.cache_dir, npy_filename)
+
+    if path.exists(npy_path):
+        return
+
+    graph = graph_obj
+    if graph is None:
+        try:
+            with open(file_path, 'rb') as f:
+                graph = pickle.load(f)
+        except Exception as e:
+            print(f"Failed to load {file_path}: {e}")
+            return
+
+    ranking_func = get_ranking(centrality_name)
+    scores_dict = ranking_func(graph)
+
+    if graph.number_of_nodes() > 0:
+        scores_arr = np.array([scores_dict[i] for i in range(graph.number_of_nodes())])
+    else:
+        scores_arr = np.array([])
+
+    np.save(npy_path, scores_arr)
