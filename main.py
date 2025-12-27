@@ -90,7 +90,7 @@ def run_comparing_sim(runs: int, centrality1: typing.AnyStr, centrality2: typing
         # Updating library.run_in_parallel to accept a list of functions would be better.
         # Or just do it here.
 
-        with multiprocessing.Pool() as pool:
+        with multiprocessing.Pool(processes=configuration.max_processes) as pool:
             # tasks is a list of partials.
             # pool.map(lambda f: f(), tasks) ?
             # tasks are not picklable if they contain local functions? Partial is picklable.
@@ -155,13 +155,19 @@ def main():
 
             process_args = [(i, configuration, existing_files, all_centralities) for i in range(configuration.runs)]
 
-            with multiprocessing.Pool() as pool:
-                cached_files = pool.starmap(library.process_graph, process_args)
+            if configuration.max_processes == 1:
+                cached_files = [library.process_graph(*args) for args in process_args]
+            else:
+                with multiprocessing.Pool(processes=configuration.max_processes) as pool:
+                    cached_files = pool.starmap(library.process_graph, process_args)
 
             print(f"Prepared {len(cached_files)} graphs.")
 
+        if configuration.only_compute:
+            continue
+
         for centrality_pair in configuration.centralities:
-            run_comparing_sim(configuration.runs, centrality_pair[0], centrality_pair[1], configuration, note=configuration.note, parallel=True, cached_files=cached_files)
+            run_comparing_sim(configuration.runs, centrality_pair[0], centrality_pair[1], configuration, note=configuration.note, parallel=(configuration.max_processes != 1), cached_files=cached_files)
             print(f"Completed simulation for {centrality_pair[0]} vs. {centrality_pair[1]}, configuration: {conf_file}")
 
 
