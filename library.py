@@ -21,7 +21,7 @@ try:
 except ImportError:
     HAS_IGRAPH = False
 
-Conf = namedtuple('Conf', 'generator note name centralities suffix runs cache save load cache_dir N M only_compute max_processes')
+Conf = namedtuple('Conf', 'generator note name centralities suffix runs cache save load cache_dir N M only_compute max_processes cutoff')
 
 def nx_to_igraph(graph: typing.Union[nx.Graph, nx.DiGraph]) -> "ig.Graph":
     if not HAS_IGRAPH:
@@ -82,6 +82,10 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
         note = f'{graph_model}-"inPL_exp":{gamma}-"outPL_exp":{out_gamma}'
 
     simulation = config_object["SIMULATION"]
+    cutoff_val = simulation.get("cutoff", fallback=None)
+    if cutoff_val is not None:
+        cutoff_val = int(cutoff_val)
+
     if simulation["centralities"] == "pagerankDF":
         centralities = []
         if "DFstep" in simulation.keys():
@@ -110,6 +114,13 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
                 else:
                     print("Warning: closeness1-Q requested but Q not defined in SIMULATION.")
             else:
+                if cutoff_val is not None:
+                    if c == "betweenness":
+                        c = f"betweenness-{cutoff_val}"
+                    elif c == "closeness":
+                        c = f"closeness-{cutoff_val}"
+                    elif c == "load":
+                        c = f"load-{cutoff_val}"
                 centralities.append(c)
         all_scenarios = list(combinations(centralities, 2))
     runs = int(simulation["runs"])
@@ -128,7 +139,7 @@ def get_config_from_ini(path_to_ini: str) -> typing.NamedTuple:
     if max_processes is not None:
         max_processes = int(max_processes)
 
-    return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs, cache, save, load, cache_dir, vertex_count, graph_model, only_compute, max_processes)
+    return Conf(graph_generator, full_note, path_to_ini, all_scenarios, suffix, runs, cache, save, load, cache_dir, vertex_count, graph_model, only_compute, max_processes, cutoff_val)
 
 def generate_network(n, net_type, gamma=None, out_gamma=None):
     match net_type:
@@ -215,8 +226,8 @@ def get_ranking_betweenness(graph: nx.Graph, cutoff: int = None) -> typing.Dict:
         print(f"Warning: NetworkX does not support cutoff for betweenness. Ignoring cutoff={cutoff}.")
     return nx.algorithms.betweenness_centrality(graph)
 
-def get_ranking_load(graph: nx.Graph) -> typing.Dict:
-    return nx.algorithms.load_centrality(graph)
+def get_ranking_load(graph: nx.Graph, cutoff: int = None) -> typing.Dict:
+    return nx.algorithms.load_centrality(graph, cutoff=cutoff)
 
 def get_ranking_degree(graph: nx.Graph) -> typing.Dict:
     res = _igraph_centrality_wrapper(graph, "degree")
@@ -278,6 +289,13 @@ def get_ranking(centrality: typing.AnyStr):
         try:
             cutoff = int(centrality.split("-")[1])
             return partial(get_ranking_closeness, cutoff=cutoff)
+        except ValueError:
+            pass
+
+    if centrality.startswith("load-"):
+        try:
+            cutoff = int(centrality.split("-")[1])
+            return partial(get_ranking_load, cutoff=cutoff)
         except ValueError:
             pass
 
