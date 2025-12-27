@@ -142,24 +142,37 @@ def main():
             print(f"Found {len(existing_files)} existing files in cache.")
 
             # 3. Process graphs (Load/Generate -> Compute -> Save)
-            # We need 'runs' graphs.
-            # If runs > existing, we generate new ones.
-            # If runs <= existing, we use the first 'runs' files (or all? usually runs).
+            # We separate topology generation from centrality computation to allow parallelizing
+            # centrality computation even for a single graph.
 
-            # We launch parallel processing to ensure they are ready.
-            # Function: library.process_graph(index, config, cached_files, all_centralities)
-            # We need to map indices 0..runs-1
-
-            # NOTE: library.process_graph returns the filename.
-            # We want to collect these filenames.
-
-            process_args = [(i, configuration, existing_files, all_centralities) for i in range(configuration.runs)]
+            # Phase 1: Ensure Topology
+            # This returns a list of (file_path, graph_obj_or_None)
+            topology_args = [(i, configuration, existing_files) for i in range(configuration.runs)]
 
             if configuration.max_processes == 1:
-                cached_files = [library.process_graph(*args) for args in process_args]
+                topology_results = [library.ensure_graph_topology(*args) for args in topology_args]
             else:
                 with multiprocessing.Pool(processes=configuration.max_processes) as pool:
-                    cached_files = pool.starmap(library.process_graph, process_args)
+                    topology_results = pool.starmap(library.ensure_graph_topology, topology_args)
+
+            # Collect paths for later simulation phases
+            # If we received (path, obj), we just need path.
+            cached_files = [res[0] for res in topology_results]
+
+            # Phase 2: Compute Centralities
+            # We create a task for every graph and every centrality.
+            # Task: (file_path, graph_obj, centrality_name, config)
+            compute_tasks = []
+            for (f_path, g_obj) in topology_results:
+                for cent in all_centralities:
+                    compute_tasks.append((f_path, g_obj, cent, configuration))
+
+            if configuration.max_processes == 1:
+                for task in compute_tasks:
+                    library.compute_centrality_for_graph(*task)
+            else:
+                with multiprocessing.Pool(processes=configuration.max_processes) as pool:
+                    pool.starmap(library.compute_centrality_for_graph, compute_tasks)
 
             print(f"Prepared {len(cached_files)} graphs.")
 
